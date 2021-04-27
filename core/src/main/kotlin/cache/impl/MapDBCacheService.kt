@@ -53,15 +53,20 @@ class MapDBCacheService : CacheService {
     }
 
     fun stats(): List<Pair<String, String>> = dbMemory.getAll().map {
-        @Suppress("UNCHECKED_CAST")
-        val cache = it.value as HTreeMap<Any, ByteArray>
-        val cacheBytesSize = cache
+        val cacheBytesSize = hTreeMap(it)
             .mapNotNull { entry -> entry.value }
             .sumBy { bytes -> bytes.size }
         val kb = 1024.0
         val stats = "size: ${cacheBytesSize / kb} KB (${cacheBytesSize / (kb * 1024)} MB)"
         it.key to stats
     }
+
+    fun flush() = dbMemory.getAll().map {
+        hTreeMap(it).clear()
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    private fun hTreeMap(it: Map.Entry<String, Any?>): HTreeMap<Any, ByteArray> = it.value as HTreeMap<Any, ByteArray>
 
 }
 

@@ -170,6 +170,10 @@ class DrillAdminEndpoints(override val kodein: Kodein) : KodeinAware {
                 val cacheStats = (cacheService as? MapDBCacheService)?.stats() ?: emptyList()
                 call.respond(HttpStatusCode.OK, cacheStats)
             }
+            get<ApiRoot.CacheFlush> {
+                (cacheService as? MapDBCacheService)?.flush()
+                call.respond(HttpStatusCode.OK)
+            }
         }
     }
 }

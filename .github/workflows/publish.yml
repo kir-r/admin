@@ -2,7 +2,7 @@ name: Build & publish drill artifacts
 on:
   push:
     branches:
-      - 'EPMDJ-8073'
+      - 'feature/EPMDJ-8073'
 
 jobs:
   publish:

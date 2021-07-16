@@ -2,7 +2,7 @@ name: Release
 on:
   push:
     branches:
-      - 'EPMDJ-8073'
+      - 'feature/EPMDJ-8073'
 
 jobs:
   release:

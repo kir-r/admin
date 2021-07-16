@@ -8,7 +8,7 @@
     <root level="${LOG_LEVEL}">
         <appender-ref ref="STDOUT"/>
     </root>
-    <logger name="org.eclipse.jetty" level="debug"/>
-    <logger name="io.netty" level="debug"/>
-    <logger name="jetbrains.exodus" level="debug"/>
+    <logger name="org.eclipse.jetty" level="trace"/>
+    <logger name="io.netty" level="trace"/>
+    <logger name="jetbrains.exodus" level="trace"/>
 </configuration>

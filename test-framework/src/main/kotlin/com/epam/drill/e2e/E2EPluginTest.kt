@@ -129,7 +129,7 @@ fun AdminTest.pluginAction(
     resultBlock: suspend (HttpStatusCode?, String?) -> Unit = { _, _ -> },
 ) = callAsync(asyncEngine.context) {
     val location = groupApi(groupId) { group ->
-        ApiRoot.AgentGroup.Plugin(group).let { ApiRoot.AgentGroup.Plugin.DispatchAction(it, pluginId) }
+        ApiRoot.AgentGroup.Plugin(group).let { ApiRoot.AgentGroup.Plugin.AgentDispatchAction(it, pluginId) }
     }
     val uri = engine.toApiUri(location)
     engine.handleRequest(HttpMethod.Post, uri) {
@@ -158,7 +158,7 @@ data class PluginTestContext(
     ) = callAsync(context) {
         engine.handleRequest(
             HttpMethod.Post,
-            engine.toApiUri(agentApi { ApiRoot.Agents.DispatchPluginAction(it, agentId, pluginId) })
+            engine.toApiUri(agentApi { ApiRoot.Agents.DispatchPluginActionForBuild(it, agentId, pluginId) })
         ) {
             addHeader(HttpHeaders.Authorization, "Bearer $token")
             setBody(payload)

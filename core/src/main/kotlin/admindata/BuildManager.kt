@@ -15,8 +15,8 @@
  */
 package com.epam.drill.admin.admindata
 
+import com.epam.drill.admin.agent.*
 import com.epam.drill.admin.build.*
-import com.epam.drill.common.*
 import kotlinx.atomicfu.*
 import kotlinx.collections.immutable.*
 
@@ -30,13 +30,13 @@ class AgentBuildManager(
     private val buildMap: PersistentMap<String, AgentBuild>
         get() = _buildMap.value
 
-    private val _addedClasses = atomic(persistentListOf<ByteArray>())
+    private val _addedClasses = atomic(persistentMapOf<String, PersistentList<ByteArray>>())
 
     private val _buildMap = atomic(
         builds.associateBy { it.info.version }.toPersistentMap()
     )
 
-    operator fun get(version: String) = buildMap[version]?.info
+    operator fun get(version: String) = buildMap[version]
 
     internal fun delete(version: String) = _buildMap.update { it.remove(version) }
 
@@ -54,7 +54,12 @@ class AgentBuildManager(
         } else map
     }.getValue(version)
 
-    internal fun addClass(rawData: ByteArray) = _addedClasses.update { it + rawData }
+    internal fun addClass(buildVersion: String, rawData: ByteArray) = _addedClasses.update {
+        val current = it[buildVersion] ?: persistentListOf()
+        it.put(buildVersion, current + rawData)
+    }
 
-    internal fun collectClasses(): List<ByteArray> = _addedClasses.getAndUpdate { persistentListOf() }
+    internal fun collectClasses(
+        buildVersion: String = ""
+    ): List<ByteArray> = _addedClasses.getAndUpdate { it - buildVersion }[buildVersion] ?: emptyList()
 }

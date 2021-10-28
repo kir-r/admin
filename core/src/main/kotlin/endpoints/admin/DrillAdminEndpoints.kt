@@ -22,14 +22,14 @@ import com.epam.drill.admin.agent.logging.*
 import com.epam.drill.admin.api.*
 import com.epam.drill.admin.api.agent.*
 import com.epam.drill.admin.api.routes.*
+import com.epam.drill.admin.build.*
 import com.epam.drill.admin.cache.*
 import com.epam.drill.admin.cache.impl.*
 import com.epam.drill.admin.common.serialization.*
 import com.epam.drill.admin.endpoints.*
-import com.epam.drill.admin.plugin.TogglePayload
-import com.epam.drill.admin.endpoints.AgentKey
 import com.epam.drill.admin.plugins.*
 import com.epam.drill.api.*
+import com.epam.drill.common.*
 import de.nielsfalk.ktor.swagger.*
 import io.ktor.application.*
 import io.ktor.auth.*
@@ -38,6 +38,7 @@ import io.ktor.http.*
 import io.ktor.http.cio.websocket.*
 import io.ktor.response.*
 import io.ktor.routing.*
+import kotlinx.coroutines.*
 import mu.*
 import org.kodein.di.*
 import org.kodein.di.generic.*
@@ -99,17 +100,17 @@ class DrillAdminEndpoints(override val kodein: Kodein) : KodeinAware {
                         ok<Unit>(), notFound(), badRequest()
                     )
                 post<ApiRoot.Agents.ToggleAgent>(meta) { params ->
-                    val (_, agentId) = params
+                    val (_, agentId, buildVersion) = params
                     logger.info { "Toggle agent $agentId" }
                     val (status, response) = agentManager[agentId]?.let { agentInfo ->
-                        val status = agentManager.getStatus(agentId)
+                        val status = agentManager.getStatus(agentId, buildVersion)
                         when (status) {
                             AgentStatus.OFFLINE -> AgentStatus.ONLINE
                             AgentStatus.ONLINE -> AgentStatus.OFFLINE
                             else -> null
                         }?.let { newStatus ->
                             agentManager.instanceIds(agentId).forEach { (id, value) ->
-                                val agentKey = AgentKey(agentId, agentInfo.buildVersion)
+                                val agentKey = AgentBuildId(agentId, buildVersion)
                                 agentManager.updateInstanceStatus(agentKey, id, newStatus)
                                 val toggleValue = newStatus == AgentStatus.ONLINE
                                 agentInfo.plugins.map { pluginId ->
@@ -160,13 +161,40 @@ class DrillAdminEndpoints(override val kodein: Kodein) : KodeinAware {
                         ok<String>(), badRequest()
                     )
                 put<ApiRoot.Agents.SystemSettings, SystemSettingsDto>(meta) { params, settingsDto ->
-                    val (_, agentId) = params
+                    val (_, agentId, buildVersion) = params
                     settingsDto.takeIf { it.packages.none(String::isBlank) }?.let {
-                        agentManager.updateSystemSettings(agentId, it)
+                        agentManager.updateSystemSettings(agentId, buildVersion, it)
                         call.respond(HttpStatusCode.OK, EmptyContent)
                     } ?: call.respond(HttpStatusCode.BadRequest, "Package prefixes contain an empty value.")
                 }
             }
+
+            authenticate {
+                val meta = "Update system settings for follow-up builds"
+                    .examples(
+                        example(
+                            "systemSettings",
+                            SystemSettingsDto(
+                                listOf("some package prefixes"),
+                                "some session header name"
+                            )
+                        )
+                    )
+                    .responds(
+                        ok<String>(), badRequest()
+                    )
+                put<ApiRoot.Agents.AgentSystemSettings, SystemSettingsDto>(meta) { params, settingsDto ->
+                    val (_, agentId) = params
+                    settingsDto.takeIf { it.packages.none(String::isBlank) }?.let {
+                        val adminData = agentManager.adminData(agentId)
+                        agentManager.getOrNull(agentId)?.let {
+                            adminData.updateAgentSettings(settingsDto)
+                            call.respond(HttpStatusCode.OK, "Settings for follow-up builds has changed")
+                        } ?: call.respond(HttpStatusCode.BadRequest, "")
+                    } ?: call.respond(HttpStatusCode.BadRequest, "Package prefixes contain an empty value.")
+                }
+            }
+
             authenticate {
                 val meta = "Return cache stats"
                     .examples()

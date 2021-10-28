@@ -44,6 +44,7 @@ import io.ktor.response.*
 import io.ktor.routing.*
 import io.ktor.util.pipeline.*
 import kotlinx.coroutines.*
+import kotlinx.serialization.builtins.*
 import kotlinx.serialization.json.*
 import mu.*
 import org.kodein.di.*
@@ -65,6 +66,7 @@ internal class PluginDispatcher(override val kodein: Kodein) : KodeinAware {
 
     suspend fun processPluginData(
         agentInfo: AgentInfo,
+        buildVersion: String,
         instanceId: String,
         pluginData: String,
     ) {
@@ -72,7 +74,7 @@ internal class PluginDispatcher(override val kodein: Kodein) : KodeinAware {
         val pluginId = message.pluginId
         plugins[pluginId]?.let {
             val agentEntry = agentManager.entryOrNull(agentInfo.id)!!
-            agentEntry[pluginId]?.run {
+            agentEntry[buildVersion, pluginId]?.run {
                 processData(instanceId, message.drillMessage.content)
             } ?: logger.error { "Plugin $pluginId not initialized for agent ${agentInfo.id}!" }
         } ?: logger.error { "Plugin $pluginId not loaded!" }
@@ -97,28 +99,28 @@ internal class PluginDispatcher(override val kodein: Kodein) : KodeinAware {
                             example("")
                         ), notFound()
                     )
-                post<ApiRoot.Agents.DispatchPluginAction, String>(meta) { payload, action ->
+                post<ApiRoot.Agents.BuildDispatchAction, String>(meta) { payload, action ->
+                    val (_, buildVersion, agentId, pluginId) = payload
+                    val responses = dispatchAction(agentId, setOf(buildVersion), pluginId, action)
+                    sendResponse(responses, HttpStatusCode.OK)
+                }
+            }
+
+            authenticate {
+                val meta = "Dispatch Plugin Action"
+                    .examples(
+                        example("action", "some action name")
+                    )
+                    .responds(
+                        ok<String>(
+                            example("")
+                        ), notFound()
+                    )
+                post<ApiRoot.Agents.AgentDispatchAction, String>(meta) { payload, action ->
                     val (_, agentId, pluginId) = payload
-                    logger.debug { "Dispatch action plugin with id $pluginId for agent with id $agentId" }
-                    val agent = agentManager.entryOrNull(agentId)
-                    val (statusCode, response) = agent?.run {
-                        val plugin: Plugin? = this@PluginDispatcher.plugins[pluginId]
-                        if (plugin != null) {
-                            if (agentManager.getStatus(agentId) == AgentStatus.ONLINE) {
-                                this[pluginId]?.let { adminPart ->
-                                    val result = adminPart.processAction(action, agentManager::agentSessions)
-                                    val statusResponse = result.toStatusResponse()
-                                    HttpStatusCode.fromValue(statusResponse.code) to statusResponse
-                                } ?: (HttpStatusCode.BadRequest to ErrorResponse(
-                                    "Cannot dispatch action: plugin $pluginId not initialized for agent $agentId."
-                                ))
-                            } else HttpStatusCode.BadRequest to ErrorResponse(
-                                "Cannot dispatch action for plugin '$pluginId', agent '$agentId' is not online."
-                            )
-                        } else HttpStatusCode.NotFound to ErrorResponse("Plugin with id $pluginId not found")
-                    } ?: (HttpStatusCode.NotFound to ErrorResponse("Agent with id $pluginId not found"))
-                    logger.info { "response for '$agentId': $response" }
-                    sendResponse(response, statusCode)
+                    val builds = agentManager[agentId]?.builds?.keys ?: emptySet()
+                    val responses = dispatchAction(agentId, builds, pluginId, action)
+                    sendResponse(responses, HttpStatusCode.OK)
                 }
             }
 
@@ -136,7 +138,7 @@ internal class PluginDispatcher(override val kodein: Kodein) : KodeinAware {
                     .description("To try out this request, please use the Postman")
                     .responds(ok<String>(), badRequest())
                 // TODO EPMDJ-8531 Support multipart/form-data in ktor-swagger
-                post<ApiRoot.Agents.ProcessData, MultiPartData>(meta) { (_, agentId, pluginId), data ->
+                post<ApiRoot.Agents.ProcessData, MultiPartData>(meta) { (_, buildVersion, agentId, pluginId), data ->
                     val parts: List<PartData> = data.readAllParts()
                     val action = (parts.find { it.name == "action" } as PartData.FormItem).value
                     val inputStream = (parts.find { it.name == "data" } as PartData.FileItem).streamProvider()
@@ -145,8 +147,8 @@ internal class PluginDispatcher(override val kodein: Kodein) : KodeinAware {
                     val (statusCode, response) = agentEntry?.run {
                         val plugin: Plugin? = this@PluginDispatcher.plugins[pluginId]
                         if (plugin != null) {
-                            if (agentManager.getStatus(agentId) == AgentStatus.ONLINE) {
-                                this[pluginId]?.let { adminPart ->
+                            if (agentManager.getStatus(agentId, buildVersion) == AgentStatus.ONLINE) {
+                                this[buildVersion, pluginId]?.let { adminPart ->
                                     val result = adminPart.doRawAction(action, inputStream)
                                     val statusResponse = result.toStatusResponse()
                                     HttpStatusCode.fromValue(statusResponse.code) to statusResponse
@@ -173,42 +175,47 @@ internal class PluginDispatcher(override val kodein: Kodein) : KodeinAware {
                             example("")
                         ), notFound()
                     )
-                post<ApiRoot.AgentGroup.Plugin.DispatchAction, String>(meta) { pluginParent, action ->
+                post<ApiRoot.AgentGroup.Plugin.AgentDispatchAction, String>(meta) { pluginParent, action ->
                     val pluginId = pluginParent.pluginId
                     val groupId = pluginParent.parent.parent.groupId
-                    val agents = agentManager.agentsByGroup(groupId)
-                    logger.debug { "Dispatch action plugin with id $pluginId for agents with groupId $groupId" }
-                    val (statusCode, response) = plugins[pluginId]?.let {
-                        processMultipleActions(
-                            agents,
-                            pluginId,
-                            action
-                        )
-                    } ?: (HttpStatusCode.NotFound to ErrorResponse("Plugin $pluginId not found."))
-                    logger.trace { "response for '$groupId': $response" }
-                    call.respond(statusCode, response)
+                    val builds = agentManager.agentsByGroup(groupId).flatMap { agent ->
+                        agent.info.builds.map { it.value.id }
+                    }
+                    val responses = dispatchActionSG(
+                        groupId,
+                        builds,
+                        pluginId,
+                        action
+                    )
+                    call.respond(HttpStatusCode.OK, responses)
                 }
             }
 
-            //todo remove it cause it is duplicated in another place. EPMDJ-6145
-            get<ApiRoot.Agents.PluginData> { (_, agentId, pluginId, dataType) ->
-                logger.debug { "Get plugin data, agentId=$agentId, pluginId=$pluginId, dataType=$dataType" }
-                val dp: Plugin? = plugins[pluginId]
-                val agentInfo = agentManager[agentId]
-                val agentEntry = agentManager.entryOrNull(agentId)
-                val (statusCode: HttpStatusCode, response: Any) = when {
-                    (dp == null) -> HttpStatusCode.NotFound to ErrorResponse("Plugin '$pluginId' not found")
-                    (agentInfo == null) -> HttpStatusCode.NotFound to ErrorResponse("Agent '$agentId' not found")
-                    (agentEntry == null) -> HttpStatusCode.NotFound to ErrorResponse("Data for agent '$agentId' not found")
-                    else -> AgentSubscription(agentId, agentInfo.buildVersion).let { subscription ->
-                        pluginCache.retrieveMessage(
-                            pluginId,
-                            subscription,
-                            "/data/$dataType"
-                        ).toStatusResponsePair()
-                    }
+            authenticate {
+                val meta = "Dispatch defined plugin actions in defined group"
+                    .examples(
+                        example("action", "some action name")
+                    )
+                    .responds(
+                        ok<String>(
+                            example("")
+                        ), notFound()
+                    )
+                post<ApiRoot.AgentGroup.Plugin.BuildDispatchAction, MultiPartData>(meta) { pluginParent, data ->
+                    val pluginId = pluginParent.pluginId
+                    val groupId = pluginParent.parent.parent.groupId
+                    val parts: List<PartData> = data.readAllParts()
+                    val action = (parts.find { it.name == "action" } as PartData.FormItem).value
+                    val buildsString = (parts.find { it.name == "builds" } as PartData.FormItem).value
+                    val builds = json.decodeFromString(ListSerializer(AgentBuildId.serializer()), buildsString)
+                    val responses = dispatchActionSG(
+                        groupId,
+                        builds,
+                        pluginId,
+                        action
+                    )
+                    call.respond(HttpStatusCode.OK, responses)
                 }
-                sendResponse(response, statusCode)
             }
 
             authenticate {
@@ -277,17 +284,22 @@ internal class PluginDispatcher(override val kodein: Kodein) : KodeinAware {
                     logger.debug { "Starting to remove a build '$buildVersion' for agent '$agentId', plugin '$pluginId'..." }
                     val (status, msg) = if (agentId in agentManager) {
                         if (plugins[pluginId] != null) {
-                            val curBuildVersion = agentManager.buildVersionByAgentId(agentId)
-                            if (buildVersion != curBuildVersion) {
+                            val curBuildVersions = agentManager[agentId]?.builds?.keys?.filter {
+                                agentManager.getStatus(agentId, it) != AgentStatus.OFFLINE
+                            } ?: emptyList()
+                            if (buildVersion !in curBuildVersions) {
                                 pluginStores[pluginId].deleteBy<Stored> {
                                     (Stored::id.startsWith(agentKeyPattern(agentId, buildVersion)))
                                 }
                                 agentStores[agentId].deleteById<AgentBuildData>(AgentBuildId(agentId, buildVersion))
                                 agentManager.adminData(agentId).run {
                                     buildManager.delete(buildVersion)
-                                    deleteClassBytes(AgentKey(agentId, buildVersion))
+                                    deleteClassBytes(AgentBuildId(agentId, buildVersion))
                                 }
-                                (cacheService as? MapDBCacheService)?.clear(AgentCacheKey(pluginId, agentId), buildVersion)
+                                (cacheService as? MapDBCacheService)?.clear(
+                                    AgentCacheKey(pluginId, agentId),
+                                    buildVersion
+                                )
                                 HttpStatusCode.OK to EmptyContent
                             } else HttpStatusCode.BadRequest to ErrorResponse("Can not remove a current build")
                         } else HttpStatusCode.BadRequest to ErrorResponse("Plugin '$pluginId' not found")
@@ -316,6 +328,55 @@ internal class PluginDispatcher(override val kodein: Kodein) : KodeinAware {
                 call.respond(status, message)
             }
         }
+    }
+
+    private suspend fun dispatchAction(
+        agentId: String,
+        versions: Set<String>,
+        pluginId: String,
+        action: String
+    ) = versions.map { buildVersion ->
+        logger.debug { "Dispatch action plugin with id $pluginId for agent with id $agentId and version $buildVersion" }
+        val agent = agentManager.entryOrNull(agentId)
+        val (statusCode, response) = agent?.run {
+            val plugin: Plugin? = this@PluginDispatcher.plugins[pluginId]
+            if (plugin != null) {
+                if (agentManager.getStatus(agentId, buildVersion) == AgentStatus.ONLINE) {
+                    this[buildVersion, pluginId]?.let { adminPart ->
+                        val result =
+                            adminPart.processAction(action, buildVersion, agentManager::agentSessions)
+                        val statusResponse = result.toStatusResponse()
+                        HttpStatusCode.fromValue(statusResponse.code) to statusResponse
+                    } ?: (HttpStatusCode.BadRequest to ErrorResponse(
+                        "Cannot dispatch action: plugin $pluginId not initialized for agent $agentId."
+                    ))
+                } else HttpStatusCode.BadRequest to ErrorResponse(
+                    "Cannot dispatch action for plugin '$pluginId', agent '$agentId' is not online."
+                )
+            } else HttpStatusCode.NotFound to ErrorResponse("Plugin with id $pluginId not found")
+        } ?: (HttpStatusCode.NotFound to ErrorResponse("Agent with id $pluginId not found"))
+        logger.info { "response for '$agentId': $response" }
+        statusCode to response
+    }
+
+    private suspend fun dispatchActionSG(
+        groupId: String,
+        versions: List<AgentBuildId> = emptyList(),
+        pluginId: String,
+        action: String
+    ) = run {
+        val agents = agentManager.agentsByGroup(groupId)
+        logger.debug { "Dispatch action plugin with id $pluginId for agents with groupId $groupId" }
+        val (statusCode, response) = plugins[pluginId]?.let {
+            processMultipleActions(
+                agents,
+                versions,
+                pluginId,
+                action
+            )
+        } ?: (HttpStatusCode.NotFound to ErrorResponse("Plugin $pluginId not found."))
+        logger.trace { "response for '$groupId': $response" }
+        statusCode to response
     }
 
     private fun pluginRoutes(pluginId: String, classLoader: ClassLoader): List<String> {
@@ -368,7 +429,7 @@ internal class PluginDispatcher(override val kodein: Kodein) : KodeinAware {
         val type = this["type"]
         val groupId = this["groupId"] ?: ""
         val agentId = this["agentId"] ?: ""
-        val buildVersion = this["buildVersion"]
+        val buildVersion = this["buildVersion"] ?: ""
         logger.debug { "plugin $pluginId type $type id $agentId $groupId buildVersion $buildVersion" }
         return when (type) {
             "AGENT" -> AgentSubscription(agentId = agentId, buildVersion = buildVersion)
@@ -405,30 +466,35 @@ internal class PluginDispatcher(override val kodein: Kodein) : KodeinAware {
 
     private suspend fun processMultipleActions(
         agents: List<Agent>,
+        builds: List<AgentBuildId>,
         pluginId: String,
         action: String,
     ): Pair<HttpStatusCode, List<JsonElement>> {
         val statusesResponse: List<JsonElement> = supervisorScope {
             agents.map { agent ->
                 val agentId = agent.info.id
+                //todo передавать версии билдов, для которых стартануть сессию с помощью form-data
                 async {
-                    when (val status = agentManager.getStatus(agent.info.id)) {
-                        AgentStatus.ONLINE -> agent[pluginId]?.run {
-                            val adminActionResult = processAction(action, agentManager::agentSessions)
-                            adminActionResult.toStatusResponse()
-                        }
-                        AgentStatus.NOT_REGISTERED, AgentStatus.OFFLINE -> null
-                        else -> "Agent $agentId is in the wrong state - $status".run {
-                            StatusMessageResponse(
-                                code = HttpStatusCode.Conflict.value,
-                                message = this
-                            )
+                    builds.filter { it.agentId == agentId }.mapNotNull { buildId ->
+                        val buildVersion = buildId.version
+                        when (val status = agentManager.getStatus(agent.info.id, buildVersion)) {
+                            AgentStatus.ONLINE -> agent[buildVersion, pluginId]?.run {
+                                val adminActionResult = processAction(action, buildVersion, agentManager::agentSessions)
+                                adminActionResult.toStatusResponse()
+                            }
+                            AgentStatus.OFFLINE -> null
+                            else -> "Agent $agentId is in the wrong state - $status".run {
+                                StatusMessageResponse(
+                                    code = HttpStatusCode.Conflict.value,
+                                    message = this
+                                )
+                            }
                         }
                     }
                 }
             }.mapNotNull { deferred ->
                 runCatching { deferred.await() }.getOrNull()
-            }.map { WithStatusCode.serializer() toJson it }
+            }.map { json.encodeToJsonElement(ListSerializer(WithStatusCode.serializer()), it) }
         }
         return HttpStatusCode.OK to statusesResponse
     }

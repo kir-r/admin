@@ -68,16 +68,20 @@ class ApiRoot(val prefix: String = "api") {
         data class AgentInfo(val parent: Agents, val agentId: String)
 
         @Group(AGENT)
-        @Location("/{agentId}/toggle")
-        data class ToggleAgent(val parent: Agents, val agentId: String)
+        @Location("/{agentId}/builds/{buildVersion}/toggle")
+        data class ToggleAgent(val parent: Agents, val agentId: String, val buildVersion: String)
 
         @Group(AGENT)
         @Location("/{agentId}/logging")
         data class AgentLogging(val parent: Agents, val agentId: String)
 
         @Group(AGENT)
+        @Location("/{agentId}/builds/{buildVersion}/system-settings")
+        data class SystemSettings(val parent: Agents, val agentId: String, val buildVersion: String)
+
+        @Group(AGENT)
         @Location("/{agentId}/system-settings")
-        data class SystemSettings(val parent: Agents, val agentId: String)
+        data class AgentSystemSettings(val parent: Agents, val agentId: String)
 
         @Group(AGENT)
         @Location("/{agentId}/parameters")
@@ -92,20 +96,25 @@ class ApiRoot(val prefix: String = "api") {
         data class Plugin(val parent: Agents, val agentId: String, val pluginId: String)
 
         @Group(AGENT_PLUGIN)
-        @Location("/{agentId}/plugins/{pluginId}/dispatch-action")
-        data class DispatchPluginAction(val parent: Agents, val agentId: String, val pluginId: String)
+        @Location("/{agentId}/builds/{buildVersion}/plugins/{pluginId}/dispatch-action")
+        data class BuildDispatchAction(
+            val parent: Agents,
+            val buildVersion: String,
+            val agentId: String,
+            val pluginId: String
+        )
 
         @Group(AGENT_PLUGIN)
-        @Location("/{agentId}/plugins/{pluginId}/process-data")
-        data class ProcessData(val parent: Agents, val agentId: String, val pluginId: String)
+        @Location("/{agentId}/plugins/{pluginId}/dispatch-action")
+        data class AgentDispatchAction(val parent: Agents, val agentId: String, val pluginId: String)
+
+        @Group(AGENT_PLUGIN)
+        @Location("/{agentId}/builds/{buildVersion}/plugins/{pluginId}/process-data")
+        data class ProcessData(val parent: Agents, val buildVersion: String, val agentId: String, val pluginId: String)
 
         @Group(AGENT_PLUGIN)
         @Location("/{agentId}/plugins/{pluginId}/toggle")
         data class TogglePlugin(val parent: Agents, val agentId: String, val pluginId: String)
-
-        @Group(AGENT_PLUGIN)
-        @Location("/{agentId}/plugins/{pluginId}/data/{dataType}")
-        data class PluginData(val parent: Agents, val agentId: String, val pluginId: String, val dataType: String)
 
         @Group(AGENT_PLUGIN)
         @Location("/{agentId}/plugins/{pluginId}/builds/summary")
@@ -133,7 +142,11 @@ class ApiRoot(val prefix: String = "api") {
         data class Plugin(val parent: AgentGroup) {
             @Group(GROUP)
             @Location("/{pluginId}/dispatch-action")
-            data class DispatchAction(val parent: Plugin, val pluginId: String)
+            data class AgentDispatchAction(val parent: Plugin, val pluginId: String)
+
+            @Group(GROUP)
+            @Location("/{pluginId}/dispatch-action")
+            data class BuildDispatchAction(val parent: Plugin, val pluginId: String)
 
             @Group(GROUP)
             @Location("/{pluginId}/data/{dataType}")

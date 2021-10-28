@@ -28,7 +28,6 @@ import kotlinx.atomicfu.*
 import kotlinx.collections.immutable.*
 import kotlinx.serialization.protobuf.*
 import mu.*
-import kotlin.time.*
 
 internal class AgentDataCache {
 
@@ -63,25 +62,30 @@ internal class AgentData(
 
     val buildManager get() = _buildManager.value
 
-    override suspend fun loadClassBytes(): Map<String, ByteArray> = storeClient.loadClasses(AgentKey(agentId, buildVersion.value))
+    override suspend fun loadClassBytes(): Map<String, ByteArray> =
+        storeClient.loadClasses(AgentBuildId(agentId, buildVersion.value))
 
-    override suspend fun loadClassBytes(buildVersion: String) = storeClient.loadClasses(AgentKey(agentId, buildVersion))
+    override suspend fun loadClassBytes(
+        buildVersion: String
+    ) = storeClient.loadClasses(AgentBuildId(agentId, buildVersion))
 
-    val settings: SystemSettingsDto get() = _settings.value
+    fun settings(buildVersion: String): SystemSettingsDto = _settings.value[buildVersion] ?: _initialSetting.value
 
     private val storeClient by lazy { agentStores[agentId] }
 
     private val _buildManager = atomic(AgentBuildManager(agentId))
 
-    private val _settings = atomic(initialSettings)
+    private val _settings = atomic(persistentMapOf<String, SystemSettingsDto>())
+
+    private val _initialSetting = atomic(initialSettings)
 
     //todo delete after removing of deprecated methods. EPMDJ-8608
     private val buildVersion = atomic("")
 
     suspend fun initBuild(version: String): Boolean {
         buildVersion.update { version }
-        if (buildManager.agentBuilds.none()) {
-            loadStoredData()
+        if (buildManager[version] == null) {
+            loadStoredData(version)
         }
         return (buildManager[version] == null).also {
             val agentBuild = buildManager.init(version)
@@ -90,9 +94,9 @@ internal class AgentData(
     }
 
     internal suspend fun initClasses(buildVersion: String) {
-        val addedClasses: List<ByteArray> = buildManager.collectClasses()
+        val addedClasses: List<ByteArray> = buildManager.collectClasses(buildVersion)
         val classBytesSize = addedClasses.sumBy { it.size } / 1024
-        val agentKey = AgentKey(agentId, buildVersion)
+        val agentKey = AgentBuildId(agentId, buildVersion)
         logger.debug { "Saving ${addedClasses.size} classes with $classBytesSize KB for $agentKey..." }
         trackTime("initClasses") {
             val classBytes: Map<String, ByteArray> = addedClasses.asSequence().map {
@@ -103,14 +107,22 @@ internal class AgentData(
         }
     }
 
+    fun updateAgentSettings(
+        settings: SystemSettingsDto,
+    ) {
+        _initialSetting.update { settings }
+        logger.info { "Settings for follow-up builds has changed" }
+    }
+
     suspend fun updateSettings(
+        version: String,
         settings: SystemSettingsDto,
         block: suspend (SystemSettingsDto) -> Unit = {},
     ) {
-        val current = this.settings
+        val current = this.settings(version)
         if (current != settings) {
-            _settings.value = settings
-            storeClient.store(toSummary())
+            _settings.update { it.put(version, settings) }
+            storeClient.store(toSummary(version))
             block(current)
         }
     }
@@ -120,11 +132,11 @@ internal class AgentData(
         val buildData = AgentBuildData(
             id = id,
             agentId = id.agentId,
-            detectedAt = detectedAt
+            detectedAt = detectedAt,
         )
         trackTime("storeBuild") {
             storeClient.executeInAsyncTransaction {
-                store(toSummary())
+                store(toSummary(agentBuild.id.version))
                 store(buildData)
             }
         }
@@ -132,40 +144,44 @@ internal class AgentData(
         logger.debug { "Saved build ${agentBuild.id}." }
     }
 
-    suspend fun deleteClassBytes(agentKey: AgentKey) = storeClient.deleteClasses(agentKey)
+    suspend fun deleteClassBytes(agentKey: AgentBuildId) = storeClient.deleteClasses(agentKey)
 
-    private suspend fun loadStoredData() = storeClient.findById<AgentDataSummary>(agentId)?.let { summary ->
-        logger.info { "Loading data for $agentId..." }
-        _settings.value = summary.settings
-        val builds: List<AgentBuild> = storeClient.findBy<AgentBuildData> {
-            AgentBuildData::agentId eq agentId
-        }.map { data ->
-            data.run {
-                AgentBuild(
-                    id = id,
-                    agentId = agentId,
-                    detectedAt = detectedAt,
-                    info = BuildInfo(
-                        version = id.version
-                    )
-                )
+    private suspend fun loadStoredData(buildVersion: String) = AgentBuildId(agentId, buildVersion).let { agentBuildId ->
+        storeClient.findById<AgentDataSummary>(agentBuildId)?.let { summary ->
+            logger.info { "Loading data for $agentBuildId..." }
+            if (_initialSetting.value != summary.settings) {
+                _settings.update { it.put(buildVersion, summary.settings) }
             }
+            val builds: List<AgentBuild> = storeClient.findBy<AgentBuildData> {
+                AgentBuildData::agentId eq agentId
+            }.map { data ->
+                data.run {
+                    AgentBuild(
+                        id = id,
+                        agentId = agentId,
+                        detectedAt = detectedAt,
+                        info = BuildInfo(
+                            version = id.version
+                        )
+                    )
+                }
+            }
+            _buildManager.value = AgentBuildManager(
+                agentId = agentId,
+                builds = builds
+            )
+            logger.debug { "Loaded data for $agentId" }
         }
-        _buildManager.value = AgentBuildManager(
-            agentId = agentId,
-            builds = builds
-        )
-        logger.debug { "Loaded data for $agentId" }
     }
 
-    private fun toSummary() = AgentDataSummary(
-        agentId = agentId,
-        settings = settings
+    private fun toSummary(version: String) = AgentDataSummary(
+        id = AgentBuildId(agentId, version),
+        settings = settings(version)
     )
 }
 
 private suspend fun StoreClient.storeClasses(
-    agentKey: AgentKey,
+    agentKey: AgentBuildId,
     classBytes: Map<String, ByteArray>,
 ) {
     trackTime("storeClasses") {
@@ -182,7 +198,7 @@ private suspend fun StoreClient.storeClasses(
 }
 
 private suspend fun StoreClient.loadClasses(
-    agentKey: AgentKey,
+    agentKey: AgentBuildId,
 ): Map<String, ByteArray> = trackTime("loadClasses") {
     findById<StoredCodeData>(agentKey)?.run {
         ProtoBuf.load(CodeData.serializer(), Zstd.decompress(data)).classBytes
@@ -193,7 +209,7 @@ private suspend fun StoreClient.loadClasses(
 }
 
 private suspend fun StoreClient.deleteClasses(
-    agentKey: AgentKey,
+    agentKey: AgentBuildId,
 ) = trackTime("deleteClasses") {
     logger.debug { "Deleting class bytes for $agentKey..." }
     deleteById<StoredCodeData>(agentKey)

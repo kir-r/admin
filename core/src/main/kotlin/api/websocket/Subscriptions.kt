@@ -40,7 +40,7 @@ sealed class Subscription {
 @SerialName("AGENT")
 data class AgentSubscription(
     val agentId: String,
-    val buildVersion: String? = null,
+    val buildVersion: String,
     override val output: OutputType = OutputType.DEFAULT,
     override val filters: Set<FieldFilter> = emptySet(),
     override val orderBy: Set<FieldOrder> = emptySet(),

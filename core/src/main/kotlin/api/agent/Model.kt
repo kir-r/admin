@@ -25,7 +25,6 @@ enum class AgentType(val notation: String) {
 }
 
 enum class AgentStatus {
-    NOT_REGISTERED,
     ONLINE,
     OFFLINE,
     BUSY;
@@ -42,19 +41,25 @@ data class SystemSettingsDto(
 data class AgentInfoDto(
     val id: String,
     val group: String,
-    val instanceIds: Set<String>,
     val name: String,
     val description: String = "",
     val environment: String = "",
-    val status: AgentStatus,
-    val buildVersion: String,
+    val isRegistered: Boolean = false,
     val adminUrl: String = "",
-    val ipAddress: String = "",
     val activePluginsCount: Int = 0,
     val agentType: String,
+    val plugins: Set<PluginDto> = emptySet(),
+    val builds: List<AgentBuildInfoDto> = emptyList(),
+)
+
+@Serializable
+data class AgentBuildInfoDto(
+    val buildVersion: String,
+    val status: AgentStatus,
+    val ipAddress: String = "",
     val agentVersion: String,
     val systemSettings: SystemSettingsDto = SystemSettingsDto(),
-    val plugins: Set<PluginDto> = emptySet(),
+    val instanceIds: Set<String> = emptySet(),
 )
 
 @Serializable

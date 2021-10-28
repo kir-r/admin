@@ -143,41 +143,6 @@ class GroupHandler(override val kodein: Kodein) : KodeinAware {
             }
 
             authenticate {
-                val meta = "Update system settings of group"
-                    .examples(
-                        example(
-                            "systemSettings",
-                            SystemSettingsDto(
-                                listOf("some package prefixes"),
-                                "some session header name"
-                            )
-                        )
-                    ).responds(
-                        ok<Unit>(),
-                        notFound()
-                    )
-                put<ApiRoot.AgentGroup.SystemSettings, SystemSettingsDto>(meta) { (group), systemSettings ->
-                    val id: String = group.groupId
-                    val status: HttpStatusCode = groupManager[id]?.let { group ->
-                        if (systemSettings.packages.all { it.isNotBlank() }) {
-                            val agentInfos: List<AgentInfo> = agentManager.agentsByGroup(id).map { it.info }
-                            val updatedAgentIds = agentManager.updateSystemSettings(agentInfos, systemSettings)
-                            groupManager.updateSystemSettings(group, systemSettings)?.let { sendUpdates(listOf(it)) }
-                            if (updatedAgentIds.count() < agentInfos.count()) {
-                                logger.error {
-                                    """Group $id: not all agents updated successfully.
-                                        |Failed agents: ${agentInfos - updatedAgentIds}.
-                                    """.trimMargin()
-                                }
-                            } else logger.debug { "Group $id: updated agents $updatedAgentIds." }
-                            HttpStatusCode.OK
-                        } else HttpStatusCode.BadRequest
-                    } ?: HttpStatusCode.NotFound
-                    call.respond(status)
-                }
-            }
-
-            authenticate {
                 val meta = "Add plugin to group".responds(ok<Unit>(), notFound(), badRequest())
                 post<ApiRoot.AgentGroup.Plugins, PluginId>(meta) { (group), (pluginId) ->
                     val groupId: String = group.groupId

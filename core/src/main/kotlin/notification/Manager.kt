@@ -59,6 +59,7 @@ class NotificationManager(override val kodein: Kodein) : KodeinAware {
 
     internal suspend fun saveNewBuildNotification(
         agentInfo: AgentInfo,
+        buildVersion: String,
     ) {
         logger.debug { "agent='${agentInfo.id}': create 'new build arrived' notification" }
         save(
@@ -67,7 +68,7 @@ class NotificationManager(override val kodein: Kodein) : KodeinAware {
                 agentId = agentInfo.id,
                 createdAt = System.currentTimeMillis(),
                 type = NotificationType.BUILD,
-                message = createNewBuildMessage(agentInfo).toJson()
+                message = createNewBuildMessage(agentInfo, buildVersion).toJson()
             )
         )
         topicResolver.sendToAllSubscribed(WsNotifications)
@@ -75,22 +76,23 @@ class NotificationManager(override val kodein: Kodein) : KodeinAware {
 
     private suspend fun createNewBuildMessage(
         agentInfo: AgentInfo,
+        buildVersion: String,
     ): NewBuildArrivedMessage = pluginCache.getData(
         agentInfo.id,
-        agentInfo.buildVersion,
+        buildVersion,
         type = "build"
     ).let { buildInfo ->
         NewBuildArrivedMessage(
-            currentId = agentInfo.buildVersion,
-            recommendations = recommendations(agentInfo),
+            currentId = buildVersion,
+            recommendations = recommendations(agentInfo, buildVersion),
             buildInfo = buildInfo.toJson()
         )
     }
 
-    private suspend fun recommendations(agentInfo: AgentInfo): Set<String> = pluginCache.run {
+    private suspend fun recommendations(agentInfo: AgentInfo, buildVersion: String): Set<String> = pluginCache.run {
         getData(
             agentInfo.id,
-            agentInfo.buildVersion,
+            buildVersion,
             type = "recommendations"
         ).let { recommendations ->
             (recommendations as? Iterable<*>)?.mapTo(mutableSetOf()) { "$it" }

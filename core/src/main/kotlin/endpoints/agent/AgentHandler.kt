@@ -19,6 +19,7 @@ package com.epam.drill.admin.endpoints.agent
 
 import com.epam.drill.admin.agent.*
 import com.epam.drill.admin.agent.AgentInfo
+import com.epam.drill.admin.build.*
 import com.epam.drill.admin.common.serialization.*
 import com.epam.drill.admin.config.*
 import com.epam.drill.admin.endpoints.*
@@ -67,13 +68,18 @@ class AgentHandler(override val kodein: Kodein) : KodeinAware {
                 }
                 agentSession.createWsLoop(
                     agentInfo,
+                    agentConfig.buildVersion,
                     call.request.headers[ContentEncoding] == "deflate"
                 )
             }
         }
     }
 
-    private suspend fun AgentWsSession.createWsLoop(agentInfo: AgentInfo, useCompression: Boolean) {
+    private suspend fun AgentWsSession.createWsLoop(
+        agentInfo: AgentInfo,
+        buildVersion: String,
+        useCompression: Boolean
+    ) {
         val agentDebugStr = agentInfo.debugString(instanceId)
         try {
             val adminData = agentManager.adminData(agentInfo.id)
@@ -102,7 +108,7 @@ class AgentHandler(override val kodein: Kodein) : KodeinAware {
 
                         when (message.type) {
                             MessageType.PLUGIN_DATA -> {
-                                pd.processPluginData(agentInfo, instanceId, message.text)
+                                pd.processPluginData(agentInfo, buildVersion, instanceId, message.text)
                             }
 
                             MessageType.MESSAGE_DELIVERED -> {
@@ -118,13 +124,13 @@ class AgentHandler(override val kodein: Kodein) : KodeinAware {
                             MessageType.CLASSES_DATA -> {
                                 message.bytes.takeIf { it.isNotEmpty() }?.let { rawBytes ->
                                     ProtoBuf.load(ByteArrayListWrapper.serializer(), rawBytes).bytesList.forEach {
-                                        adminData.buildManager.addClass(it)
+                                        adminData.buildManager.addClass(buildVersion, it)
                                     }
                                 }
                             }
 
                             MessageType.FINISH_CLASSES_TRANSFER -> adminData.apply {
-                                initClasses(agentInfo.buildVersion)
+                                initClasses(buildVersion)
                                 topicResolver.sendToAllSubscribed(WsRoutes.AgentBuilds(agentInfo.id))
                                 logger.debug { "Finished classes transfer for $agentDebugStr" }
                             }
@@ -142,7 +148,7 @@ class AgentHandler(override val kodein: Kodein) : KodeinAware {
                 else -> logger.error(ex) { "Error handling $agentDebugStr" }
             }
         } finally {
-            val agentKey = AgentKey(agentInfo.id, agentInfo.buildVersion)
+            val agentKey = AgentBuildId(agentInfo.id, buildVersion)
             agentManager.removeInstance(agentKey, instanceId)
         }
     }

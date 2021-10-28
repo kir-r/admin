@@ -112,10 +112,6 @@ class DrillPluginWs(override val kodein: Kodein) : KodeinAware {
     }
 
     private fun String.parseSubscription(): Subscription? = takeIf(String::any)?.run {
-        Subscription.serializer().parse(this).ensureBuildVersion()
+        Subscription.serializer().parse(this)
     }
-
-    private fun Subscription.ensureBuildVersion() = if (this is AgentSubscription && buildVersion == null) {
-        copy(buildVersion = agentManager.buildVersionByAgentId(agentId))
-    } else this
 }

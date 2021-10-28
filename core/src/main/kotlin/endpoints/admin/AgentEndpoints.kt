@@ -81,8 +81,7 @@ class AgentEndpoints(override val kodein: Kodein) : KodeinAware {
                 get<ApiRoot.Agents.Metadata>(meta) {
                     val metadataAgents = agentManager.all().flatMap {
                         agentManager.adminData(it.id).buildManager.agentBuilds.map { agentBuild ->
-                            val agentKey = AgentKey(it.id, agentBuild.info.version)
-                            mapOf(agentKey to stores[it.id].loadMetadata(agentKey))
+                            mapOf(agentBuild.id to stores[it.id].loadMetadata(agentBuild.id))
                         }
                     }
                     call.respond(HttpStatusCode.OK, metadataAgents)

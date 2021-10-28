@@ -16,25 +16,20 @@
 package com.epam.drill.admin.endpoints
 
 import com.epam.drill.admin.agent.*
-import com.epam.drill.admin.api.agent.*
-import com.epam.drill.admin.endpoints.agent.*
 import com.epam.drill.admin.plugins.*
 import com.epam.drill.plugin.api.*
 import com.epam.drill.plugin.api.end.*
 import com.epam.kodux.*
 import kotlinx.atomicfu.*
 import kotlinx.collections.immutable.*
-import mu.*
 import java.io.*
 import java.lang.reflect.*
 
 class Agent(info: AgentInfo) {
-    private val logger = KotlinLogging.logger { }
-
     private val _info = atomic(info)
 
     private val _instanceMap = atomic(
-        persistentHashMapOf<String, AdminPluginPart<*>>()
+        persistentHashMapOf<String, PersistentMap<String, AdminPluginPart<*>>>()
     )
 
     var info: AgentInfo
@@ -47,14 +42,19 @@ class Agent(info: AgentInfo) {
         updater: (AgentInfo) -> AgentInfo,
     ): AgentInfo = _info.updateAndGet(updater)
 
-    operator fun get(pluginId: String): AdminPluginPart<*>? = _instanceMap.value[pluginId]
+    operator fun get(
+        buildVersion: String,
+        pluginId: String
+    ): AdminPluginPart<*>? = _instanceMap.value[    buildVersion]?.get(pluginId)
 
     fun get(
+        buildVersion: String,
         pluginId: String,
         updater: Agent.() -> AdminPluginPart<*>,
-    ): AdminPluginPart<*> = get(pluginId) ?: _instanceMap.updateAndGet {
-        it.takeIf { pluginId in it } ?: it.put(pluginId, updater())
-    }.getValue(pluginId)
+    ): AdminPluginPart<*> = get(buildVersion, pluginId) ?: _instanceMap.updateAndGet { instances ->
+        val current = instances[buildVersion] ?: persistentMapOf()
+        instances.put(buildVersion, current.takeIf { pluginId in it } ?: current.put(pluginId, updater()))
+    }.getValue(buildVersion).getValue(pluginId)
 
     fun close() {
         plugins.forEach { plugin ->
@@ -64,6 +64,7 @@ class Agent(info: AgentInfo) {
 }
 
 internal fun Plugin.createInstance(
+    buildVersion: String,
     agentInfo: AgentInfo,
     data: AdminData,
     sender: Sender,
@@ -76,7 +77,7 @@ internal fun Plugin.createInstance(
     val classToArg: (Class<*>) -> Any = {
         when (it) {
             String::class.java -> pluginBean.id
-            CommonAgentInfo::class.java -> agentInfo.toCommonInfo()
+            CommonAgentInfo::class.java -> agentInfo.toCommonInfo(buildVersion)
             AdminData::class.java -> data
             Sender::class.java -> sender
             StoreClient::class.java -> store
@@ -87,8 +88,8 @@ internal fun Plugin.createInstance(
     return constructor.newInstance(*args)
 }
 
-internal suspend fun Agent.applyPackagesChanges() {
+internal suspend fun Agent.applyPackagesChanges(buildVersion: String) {
     for (pluginId in info.plugins) {
-        this[pluginId]?.applyPackagesChanges()
+        this[buildVersion, pluginId]?.applyPackagesChanges()
     }
 }

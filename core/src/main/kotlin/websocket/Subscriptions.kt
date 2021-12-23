@@ -18,9 +18,10 @@ package com.epam.drill.admin.websocket
 import com.epam.drill.admin.api.websocket.*
 
 fun Subscription?.toKey(destination: String): String = when (this) {
-    is AgentSubscription -> "${agentKeyPattern(agentId, buildVersion)}$destination"
+    is AgentSubscription -> "${agentKeyPattern(agentId, buildVersion, coverageId)}$destination"
     is GroupSubscription -> "group::$groupId$destination"
     null -> destination
 }
 
-internal fun agentKeyPattern(agentId: String, buildVersion: String?) = "agent::$agentId:$buildVersion"
+internal fun agentKeyPattern(agentId: String, buildVersion: String?, coverageId: String? = "") =
+    "agent::$agentId:$buildVersion:$coverageId"

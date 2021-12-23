@@ -99,7 +99,9 @@ class PluginSenders(override val di: DI) : DIAware {
 }
 
 internal fun SendContext.toSubscription(): Subscription = when (this) {
-    is AgentSendContext -> AgentSubscription(agentId, buildVersion)
+    is AgentSendContext -> {
+        AgentSubscription(agentId, buildVersion, coverageId.ifEmpty { null })
+    }
     is GroupSendContext -> GroupSubscription(groupId)
     else -> error("Unknown send context $this")
 }
